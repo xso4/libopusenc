@@ -1,59 +1,90 @@
-name: Linux Build Windows Artifacts
+name: Linux MinGW Build and Upload
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-windows:
-    name: Build for Windows (MinGW)
+  build:
+    name: Build ${{ matrix.build_type }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: x86_64
-            host: x86_64-w64-mingw32
-          - arch: i686
-            host: i686-w64-mingw32
+          - build_type: static
+            configure_args: --enable-static --disable-shared
+            opus_configure_args: --enable-static --disable-shared
+            cflags: -O2
+            ldflags: -static -static-libgcc -static-libstdc++
+            artifact_name: libopusenc-windows-mingw-static
+          - build_type: dynamic
+            configure_args: --enable-shared --disable-static
+            opus_configure_args: --enable-shared --disable-static
+            cflags: -O2
+            ldflags: ""
+            artifact_name: libopusenc-windows-mingw-dynamic
 
     steps:
-      - name: Checkout libopusenc
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y mingw-w64 autoconf automake libtool pkg-config make zip
+          sudo apt-get install -y autoconf automake libtool libtool-bin pkg-config make mingw-w64 git
 
-      - name: Checkout opus
-        uses: actions/checkout@v4
-        with:
-          repository: xiph/opus
-          path: opus
-
-      - name: Build opus
+      - name: Build opus dependency
         run: |
-          cd opus
+          git clone --depth 1 https://gitlab.xiph.org/xiph/opus.git opus-src
+          cd opus-src
           ./autogen.sh
-          ./configure --host=${{ matrix.host }} --prefix=${{ github.workspace }}/install-${{ matrix.arch }} --enable-static --enable-shared --disable-doc --disable-extra-programs
+          HOST=x86_64-w64-mingw32
+          BUILD=$(./config.guess)
+          mkdir build-${{ matrix.build_type }}
+          cd build-${{ matrix.build_type }}
+          CC=${HOST}-gcc \
+          CXX=${HOST}-g++ \
+          AR=${HOST}-ar \
+          RANLIB=${HOST}-ranlib \
+          STRIP=${HOST}-strip \
+          WINDRES=${HOST}-windres \
+          CFLAGS="${{ matrix.cflags }}" \
+          LDFLAGS="${{ matrix.ldflags }}" \
+          ../configure \
+            --host=$HOST \
+            --build=$BUILD \
+            --prefix=$(pwd)/install \
+            ${{ matrix.opus_configure_args }}
           make -j$(nproc)
           make install
 
       - name: Build libopusenc
         run: |
           ./autogen.sh
-          export PKG_CONFIG_PATH=${{ github.workspace }}/install-${{ matrix.arch }}/lib/pkgconfig
-          ./configure --host=${{ matrix.host }} --prefix=${{ github.workspace }}/dist-${{ matrix.arch }} --enable-static --enable-shared --disable-doc --disable-examples
+          HOST=x86_64-w64-mingw32
+          BUILD=$(./config.guess)
+          OPUS_PREFIX=${{ github.workspace }}/opus-src/build-${{ matrix.build_type }}/install
+          export PKG_CONFIG_PATH="$OPUS_PREFIX/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$OPUS_PREFIX/lib/pkgconfig"
+          mkdir build-${{ matrix.build_type }}
+          cd build-${{ matrix.build_type }}
+          CC=${HOST}-gcc \
+          CXX=${HOST}-g++ \
+          AR=${HOST}-ar \
+          RANLIB=${HOST}-ranlib \
+          STRIP=${HOST}-strip \
+          WINDRES=${HOST}-windres \
+          CFLAGS="${{ matrix.cflags }}" \
+          LDFLAGS="${{ matrix.ldflags }}" \
+          ../configure \
+            --host=$HOST \
+            --build=$BUILD \
+            --prefix=$(pwd)/install \
+            ${{ matrix.configure_args }}
           make -j$(nproc)
           make install
-
-      - name: Package artifacts
-        run: |
-          cd ${{ github.workspace }}/dist-${{ matrix.arch }}
-          zip -r ../libopusenc-${{ matrix.arch }}-windows.zip .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: libopusenc-${{ matrix.arch }}-windows
-          path: libopusenc-${{ matrix.arch }}-windows.zip
+          name: ${{ matrix.artifact_name }}
+          path: build-${{ matrix.build_type }}/install/
