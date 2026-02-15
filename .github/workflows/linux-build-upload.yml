@@ -1,61 +1,59 @@
-name: Linux MinGW Windows Build
+name: Linux Build Windows Artifacts
 
 on:
   workflow_dispatch:
 
 jobs:
-  mingw-build:
+  build-windows:
+    name: Build for Windows (MinGW)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        linkage: [static, shared]
-    env:
-      MINGW: x86_64-w64-mingw32
-      PREFIX: ${{ github.workspace }}/mingw/${{ matrix.linkage }}
+        include:
+          - arch: x86_64
+            host: x86_64-w64-mingw32
+          - arch: i686
+            host: i686-w64-mingw32
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout libopusenc
+        uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y autoconf automake libtool pkg-config make mingw-w64
+          sudo apt-get install -y mingw-w64 autoconf automake libtool pkg-config make zip
+
+      - name: Checkout opus
+        uses: actions/checkout@v4
+        with:
+          repository: xiph/opus
+          path: opus
 
       - name: Build opus
         run: |
           cd opus
           ./autogen.sh
-          mkdir -p build-${{ matrix.linkage }}
-          cd build-${{ matrix.linkage }}
-          if [ "${{ matrix.linkage }}" = "static" ]; then
-            CONFIG_FLAGS="--disable-shared --enable-static"
-          else
-            CONFIG_FLAGS="--enable-shared --disable-static"
-          fi
-          ../configure --host=${MINGW} --prefix=${PREFIX} ${CONFIG_FLAGS}
+          ./configure --host=${{ matrix.host }} --prefix=${{ github.workspace }}/install-${{ matrix.arch }} --enable-static --enable-shared --disable-doc --disable-extra-programs
           make -j$(nproc)
           make install
 
       - name: Build libopusenc
         run: |
-          cd libopusenc
           ./autogen.sh
-          mkdir -p build-${{ matrix.linkage }}
-          cd build-${{ matrix.linkage }}
-          if [ "${{ matrix.linkage }}" = "static" ]; then
-            CONFIG_FLAGS="--disable-shared --enable-static"
-          else
-            CONFIG_FLAGS="--enable-shared --disable-static"
-          fi
-          PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig" ../configure --host=${MINGW} --prefix=${PREFIX} --disable-doc --disable-examples ${CONFIG_FLAGS}
+          export PKG_CONFIG_PATH=${{ github.workspace }}/install-${{ matrix.arch }}/lib/pkgconfig
+          ./configure --host=${{ matrix.host }} --prefix=${{ github.workspace }}/dist-${{ matrix.arch }} --enable-static --enable-shared --disable-doc --disable-examples
           make -j$(nproc)
           make install
+
+      - name: Package artifacts
+        run: |
+          cd ${{ github.workspace }}/dist-${{ matrix.arch }}
+          zip -r ../libopusenc-${{ matrix.arch }}-windows.zip .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: libopusenc-windows-${{ matrix.linkage }}-mingw
-          path: |
-            ${{ env.PREFIX }}/bin
-            ${{ env.PREFIX }}/lib
-            ${{ env.PREFIX }}/include
+          name: libopusenc-${{ matrix.arch }}-windows
+          path: libopusenc-${{ matrix.arch }}-windows.zip
