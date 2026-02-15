@@ -1,0 +1,89 @@
+name: Build and Upload (Windows MSVC)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: ${{ matrix.config.name }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - name: Windows x64 Static
+            arch: x64
+            configuration: Release
+            opus_runtime: MultiThreaded
+          - name: Windows x64 Dynamic
+            arch: x64
+            configuration: ReleaseDLL
+            opus_runtime: MultiThreadedDLL
+          - name: Windows x86 Static
+            arch: Win32
+            configuration: Release
+            opus_runtime: MultiThreaded
+          - name: Windows x86 Dynamic
+            arch: Win32
+            configuration: ReleaseDLL
+            opus_runtime: MultiThreadedDLL
+
+    steps:
+      - name: Checkout libopusenc
+        uses: actions/checkout@v4
+        with:
+          path: libopusenc
+
+      - name: Checkout opus
+        uses: actions/checkout@v4
+        with:
+          repository: xiph/opus
+          path: opus
+
+      - name: Configure Opus (CMake)
+        shell: cmd
+        working-directory: opus
+        run: |
+          cmake -S . -B build -A ${{ matrix.config.arch }} ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DOPUS_BUILD_SHARED_LIBRARY=OFF ^
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=${{ matrix.config.opus_runtime }} ^
+            -DCMAKE_INSTALL_PREFIX=install
+
+      - name: Build Opus
+        shell: cmd
+        working-directory: opus
+        run: cmake --build build --config Release --parallel
+
+      - name: Prepare Opus for libopusenc
+        shell: cmd
+        working-directory: opus
+        run: |
+          mkdir win32\VS2015\${{ matrix.config.arch }}\${{ matrix.config.configuration }}
+          copy build\Release\opus.lib win32\VS2015\${{ matrix.config.arch }}\${{ matrix.config.configuration }}\opus.lib
+          if errorlevel 1 exit /b 1
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build libopusenc
+        shell: cmd
+        working-directory: libopusenc
+        run: |
+          msbuild win32\VS2015\opusenc.sln /m /p:Configuration=${{ matrix.config.configuration }} /p:Platform=${{ matrix.config.arch }} /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0
+
+      - name: Collect Artifacts
+        shell: cmd
+        run: |
+          mkdir artifacts
+          if exist libopusenc\win32\VS2015\${{ matrix.config.arch }}\${{ matrix.config.configuration }}\opusenc.lib copy libopusenc\win32\VS2015\${{ matrix.config.arch }}\${{ matrix.config.configuration }}\opusenc.lib artifacts\
+          if exist libopusenc\win32\VS2015\${{ matrix.config.arch }}\${{ matrix.config.configuration }}\opusenc.dll copy libopusenc\win32\VS2015\${{ matrix.config.arch }}\${{ matrix.config.configuration }}\opusenc.dll artifacts\
+          copy libopusenc\include\opusenc.h artifacts\
+          copy libopusenc\COPYING artifacts\
+          copy libopusenc\README.md artifacts\
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: libopusenc-${{ matrix.config.arch }}-${{ matrix.config.configuration }}
+          path: artifacts/
