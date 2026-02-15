@@ -1,72 +1,61 @@
-name: Linux MinGW Build & Upload
+name: Linux MinGW Windows Build
 
 on:
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Build ${{ matrix.type }}
+  mingw-build:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        type: [STATIC, SHARED]
-
+        linkage: [static, shared]
+    env:
+      MINGW: x86_64-w64-mingw32
+      PREFIX: ${{ github.workspace }}/mingw/${{ matrix.linkage }}
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Checkout Opus
-      uses: actions/checkout@v4
-      with:
-        repository: xiph/opus
-        path: opus
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake libtool pkg-config make mingw-w64
 
-    - name: Install Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y mingw-w64 autoconf automake libtool cmake pkg-config
+      - name: Build opus
+        run: |
+          cd opus
+          ./autogen.sh
+          mkdir -p build-${{ matrix.linkage }}
+          cd build-${{ matrix.linkage }}
+          if [ "${{ matrix.linkage }}" = "static" ]; then
+            CONFIG_FLAGS="--disable-shared --enable-static"
+          else
+            CONFIG_FLAGS="--enable-shared --disable-static"
+          fi
+          ../configure --host=${MINGW} --prefix=${PREFIX} ${CONFIG_FLAGS}
+          make -j$(nproc)
+          make install
 
-    - name: Build Opus
-      run: |
-        cd opus
-        SHARED_FLAG="OFF"
-        if [ "${{ matrix.type }}" = "SHARED" ]; then
-          SHARED_FLAG="ON"
-        fi
-        
-        cmake -S . -B build \
-          -DCMAKE_SYSTEM_NAME=Windows \
-          -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
-          -DOPUS_BUILD_SHARED_LIBRARY=$SHARED_FLAG \
-          -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install-opus \
-          -DCMAKE_BUILD_TYPE=Release
-          
-        cmake --build build --config Release -j $(nproc)
-        cmake --install build
+      - name: Build libopusenc
+        run: |
+          cd libopusenc
+          ./autogen.sh
+          mkdir -p build-${{ matrix.linkage }}
+          cd build-${{ matrix.linkage }}
+          if [ "${{ matrix.linkage }}" = "static" ]; then
+            CONFIG_FLAGS="--disable-shared --enable-static"
+          else
+            CONFIG_FLAGS="--enable-shared --disable-static"
+          fi
+          PKG_CONFIG_PATH="${PREFIX}/lib/pkgconfig" ../configure --host=${MINGW} --prefix=${PREFIX} --disable-doc --disable-examples ${CONFIG_FLAGS}
+          make -j$(nproc)
+          make install
 
-    - name: Build libopusenc
-      run: |
-        ./autogen.sh
-        
-        CONF_FLAGS=""
-        if [ "${{ matrix.type }}" = "SHARED" ]; then
-          CONF_FLAGS="--disable-static --enable-shared"
-        else
-          CONF_FLAGS="--enable-static --disable-shared"
-        fi
-        
-        # Point to opus installation
-        export PKG_CONFIG_PATH=${{ github.workspace }}/install-opus/lib/pkgconfig
-        
-        ./configure \
-          --host=x86_64-w64-mingw32 \
-          --prefix=${{ github.workspace }}/install-libopusenc \
-          $CONF_FLAGS
-          
-        make -j $(nproc)
-        make install
-
-    - name: Upload Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: libopusenc-windows-mingw-${{ matrix.type }}
-        path: install-libopusenc/
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: libopusenc-windows-${{ matrix.linkage }}-mingw
+          path: |
+            ${{ env.PREFIX }}/bin
+            ${{ env.PREFIX }}/lib
+            ${{ env.PREFIX }}/include
