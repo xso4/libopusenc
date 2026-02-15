@@ -34,8 +34,10 @@ jobs:
 
       - name: Build opus dependency
         run: |
-          git clone --depth 1 https://gitlab.xiph.org/xiph/opus.git opus-src
+          git clone https://gitlab.xiph.org/xiph/opus.git opus-src
           cd opus-src
+          git fetch --tags --force
+          ./update_version || true
           ./autogen.sh
           HOST=x86_64-w64-mingw32
           BUILD=$(./config.guess)
